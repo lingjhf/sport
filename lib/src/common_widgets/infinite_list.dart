@@ -11,6 +11,11 @@ enum InfiniteListState {
 
 enum InfiniteListPullDirection { down, up }
 
+//是否处于下拉状态，如果可以，禁止滚动
+//是否处于可回弹状态
+//是否加载状态，加载中，不可以对加载区域操作
+enum InfiniteLoading { pull, rebound, loading }
+
 class InfiniteList extends StatefulWidget {
   const InfiniteList({
     super.key,
@@ -34,34 +39,29 @@ class _InfiniteListState extends State<InfiniteList>
   //拉的方向
   InfiniteListPullDirection? _pullDirection;
 
-  //开始下拉位置
-  double _startPullRefreshY = 0;
-
-  bool _isReboundPullRefresh = false;
-
-  bool _isRefreshing = false;
-
-  double _top = 0;
-
-  final double _maxTop = 100;
-
   late AnimationController _animationController;
 
-  late Animation<double> animation;
+  late CurvedAnimation _curve;
+
+  late Animation<double> _animation;
+
+  final _pullDownController = InfiniteListPullController();
 
   @override
   void initState() {
     _animationController = AnimationController(
-        duration: const Duration(milliseconds: 100), vsync: this);
-    var curve =
+        duration: const Duration(milliseconds: 1000), vsync: this);
+    _curve =
         CurvedAnimation(parent: _animationController, curve: Curves.easeOut);
 
-    animation = Tween(begin: _maxTop, end: 60.0).animate(curve);
+    _animation = Tween(begin: 0.0, end: 0.0).animate(_curve);
+
     _animationController.addListener(() {
       setState(() {
-        _top = animation.value;
+        _pullDownController.height = _animation.value;
       });
     });
+
     super.initState();
   }
 
@@ -71,80 +71,41 @@ class _InfiniteListState extends State<InfiniteList>
     super.dispose();
   }
 
-  void _resetPullRefresh() {
-    setState(() {
-      _top = 0;
-      _startPullRefreshY = 0;
-      _isReboundPullRefresh = false;
-    });
-  }
-
-  // 触发下拉刷新
-  void _pullRefresh(DragUpdateDetails details) {
-    if (_isRefreshing) {
-      return;
-    }
-    if (_startPullRefreshY == 0) {
-      _startPullRefreshY = details.globalPosition.dy;
-      return;
-    }
-    var top = details.globalPosition.dy - _startPullRefreshY;
-    if (top < 0) {
-      top = 0;
-    } else if (top > _maxTop) {
-      top = _maxTop;
-    }
-    if (top != _top) {
-      setState(() {
-        _top = top;
-      });
-    }
-
-    //触发
-    if (top == _maxTop) {
-      _isReboundPullRefresh = false;
-    } else {
-      _isReboundPullRefresh = true;
+  void _pullDownUpdate(DragUpdateDetails details) {
+    _animationController.stop();
+    var height = _pullDownController.height;
+    print(height);
+    _pullDownController.pullUpdate(details);
+    if (_pullDownController.height != height) {
+      setState(() {});
     }
   }
 
-  void _pullRefreshEnd(DragEndDetails details) async {
-    if (_isRefreshing) {
-      return;
-    }
-    if (_isReboundPullRefresh) {
-      _resetPullRefresh();
+  //松开判断是否刷新
+  void _pullDownEnd(DragEndDetails details) async {
+    var height = _pullDownController.height;
+    _pullDownController.pullEnd(details);
+    if (_pullDownController.state == InfiniteLoading.pull) {
+      setState(() {});
     } else {
+      _animation =
+          Tween(begin: height, end: _pullDownController.height).animate(_curve);
       _animationController.reset();
       _animationController.forward();
-      _isRefreshing = true;
-      await Future.delayed(const Duration(seconds: 2));
-      _isRefreshing = false;
-      _resetPullRefresh();
     }
-  }
-
-  void _pullLoading(DragUpdateDetails details) {}
-
-  void _pullLoadingEnd(DragEndDetails details) async {}
-
-
-
-  void _pullDown(DragUpdateDetails details){
-
-  }
-
-  void _pullDownEnd(DragEndDetails details){
-
   }
 
   //监听子组件滚动是否溢出
   bool _scrollNotification(ScrollNotification notification) {
     if (notification is OverscrollNotification) {
       if (notification.overscroll < 0) {
-      } else if (notification.overscroll > 0) {}
+        _pullDirection = InfiniteListPullDirection.down;
+      } else if (notification.overscroll > 0) {
+        _pullDirection = InfiniteListPullDirection.up;
+      }
+    } else if (_pullDownController.state == null) {
+      _pullDirection = null;
     }
-
     return true;
   }
 
@@ -155,14 +116,14 @@ class _InfiniteListState extends State<InfiniteList>
             _MyVerticalDragGestureRecognizer>(
           () => _MyVerticalDragGestureRecognizer(),
           (_MyVerticalDragGestureRecognizer recognizer) {
-            recognizer.onUpdate = (DragUpdateDetails details) {
-              if (_pullState == InfiniteListPullDirection.down) {
-                _pullRefresh(details);
+            recognizer.onUpdate ??= (DragUpdateDetails details) {
+              if (_pullDirection == InfiniteListPullDirection.down) {
+                _pullDownUpdate(details);
               }
             };
-            recognizer.onEnd = (DragEndDetails details) {
-              if (_pullState == InfiniteListPullDirection.down) {
-                _pullRefreshEnd(details);
+            recognizer.onEnd ??= (DragEndDetails details) {
+              if (_pullDirection == InfiniteListPullDirection.down) {
+                _pullDownEnd(details);
               }
             };
           },
@@ -170,7 +131,19 @@ class _InfiniteListState extends State<InfiniteList>
       },
       child: NotificationListener(
         onNotification: _scrollNotification,
-        child: widget.child,
+        child: ListView.builder(
+          physics: _pullDownController.state == InfiniteLoading.pull
+              ? const NeverScrollableScrollPhysics()
+              : null,
+          itemCount: 20,
+          itemBuilder: (context, index) {
+            return Container(
+              color: Colors.green,
+              height: 70,
+              child: Text("$index"),
+            );
+          },
+        ),
       ),
     );
   }
@@ -179,7 +152,7 @@ class _InfiniteListState extends State<InfiniteList>
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Container(),
+        Container(height: _pullDownController.height, color: Colors.blue),
         Expanded(child: _buildGestureDetector()),
         Container(),
       ],
@@ -188,8 +161,6 @@ class _InfiniteListState extends State<InfiniteList>
 }
 
 class _MyVerticalDragGestureRecognizer extends VerticalDragGestureRecognizer {
-  bool needDrag = true;
-
   @override
   void rejectGesture(int pointer) {
     // 单方面宣布自己胜出
@@ -197,74 +168,46 @@ class _MyVerticalDragGestureRecognizer extends VerticalDragGestureRecognizer {
   }
 }
 
-class InfiniteLoadingAreaController with ChangeNotifier {
-  double _height = 0;
+class InfiniteListPullController {
+  InfiniteLoading? state;
 
-  double get height => _height;
+  double _pullStart = 0;
 
-  void shrink(double value) {
-    _height = value;
-    notifyListeners();
-  }
-}
+  double height = 0;
 
-//是否处于下拉状态，如果可以，禁止滚动
-//是否处于可回弹状态
-//是否加载状态，加载中，不可以对加载区域操作
-enum InfiniteLoading { pull, rebound, loading }
+  final double maxHeight = 100;
 
-class InfiniteLoadingArea extends StatefulWidget {
-  const InfiniteLoadingArea({
-    super.key,
-    required this.controller,
-    this.height = 0,
-  });
-
-  final InfiniteLoadingAreaController controller;
-
-  //当前高度
-  final double height;
-
-  @override
-  State<StatefulWidget> createState() => _InfiniteLoadingAreaState();
-}
-
-class _InfiniteLoadingAreaState extends State<InfiniteLoadingArea>
-    with SingleTickerProviderStateMixin {
-  final double _height = 0.0;
-
-  late AnimationController _animationController;
-
-  late Animation<double> _animation;
-
-  @override
-  void setState(VoidCallback fn) {
-    super.setState(fn);
-    _animationController = AnimationController(vsync: this);
-    var curve =
-        CurvedAnimation(parent: _animationController, curve: Curves.easeOut);
+  void pullUpdate(DragUpdateDetails details) {
+    if (state == InfiniteLoading.loading) {
+      return;
+    }
+    if (state != InfiniteLoading.pull) {
+      state = InfiniteLoading.pull;
+    }
+    if (_pullStart == 0) {
+      _pullStart = details.globalPosition.dy;
+      return;
+    }
+    height = details.globalPosition.dy - _pullStart;
+    if (height < 0) {
+      height = 0;
+    } else if (height > maxHeight) {
+      height = maxHeight;
+    }
   }
 
-  @override
-  void dispose() {
-    _animationController.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(covariant InfiniteLoadingArea oldWidget) {
-    super.didUpdateWidget(oldWidget);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: widget.controller,
-      builder: (context, child) {
-        return SizedBox(
-          height: _height,
-        );
-      },
-    );
+  //松开判断是否刷新
+  void pullEnd(DragEndDetails details) async {
+    if (state == InfiniteLoading.loading) {
+      return;
+    }
+    _pullStart = 0;
+    if (height < maxHeight) {
+      state = InfiniteLoading.rebound;
+      height = 0;
+    } else {
+      state = InfiniteLoading.loading;
+      height = 60;
+    }
   }
 }
